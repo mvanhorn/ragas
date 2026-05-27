@@ -107,6 +107,28 @@ class OpenTelemetryTracer(BaseCallbackHandler):
         if self.tracer is None:
             self.tracer = trace.get_tracer(self.tracer_name)
 
+    def shutdown(self) -> None:
+        """End any spans that never received a terminal callback.
+
+        Long-running evaluation runs can leave spans alive when a chain or
+        LLM call ends without firing on_*_end (e.g. cancelled run, callback
+        registration race). Without this method, the SDK keeps them in memory
+        until process exit. Call shutdown() between evaluations or on tracer
+        teardown to drain.
+        """
+        for run_id, span in list(self._spans.items()):
+            try:
+                span.set_status(Status(StatusCode.UNSET, "ended at shutdown"))
+                span.end()
+            except Exception:
+                # End-of-life best-effort; do not raise during teardown.
+                pass
+            self._spans.pop(run_id, None)
+        self._contexts.clear()
+        self._parents.clear()
+        self._row_indexes.clear()
+        self._chain_types.clear()
+
     def on_chain_start(
         self,
         serialized: t.Dict[str, t.Any],
